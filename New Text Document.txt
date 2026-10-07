@@ -1,0 +1,121 @@
+Option Explicit
+
+
+Sub DeleteMeasuringPointAnnotations()
+
+    If TypeName(CATIA.ActiveDocument) <> "DrawingDocument" Then
+        MsgBox "Open a CATDrawing document first.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim oDrawDoc As DrawingDocument
+    Set oDrawDoc = CATIA.ActiveDocument
+
+    ' ---- find linked Part (Part or first Part inside a Product) ----
+    Dim oSrcDoc As Object, oPart As Part
+    Dim si As Integer, vi As Integer
+    Dim oProd As Object
+
+    For si = 1 To oDrawDoc.Sheets.Count
+        For vi = 1 To oDrawDoc.Sheets.Item(si).Views.Count
+            On Error Resume Next
+            Set oProd = oDrawDoc.Sheets.Item(si).Views.Item(vi).GenerativeBehavior.Document
+            If Not oProd Is Nothing Then Set oSrcDoc = oProd.ReferenceProduct.Parent
+            On Error GoTo 0
+            If Not oSrcDoc Is Nothing Then
+                If TypeName(oSrcDoc) = "PartDocument" Then
+                    Set oPart = oSrcDoc.Part
+                    Exit For
+                End If
+            End If
+        Next vi
+        If Not oPart Is Nothing Then Exit For
+    Next si
+
+    If oPart Is Nothing Then
+        MsgBox "No linked Part found in this drawing.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim oHB As HybridBody
+    Dim j As Integer
+    For j = 1 To oPart.HybridBodies.Count
+        If UCase(Trim(oPart.HybridBodies.Item(j).Name)) = "MEASURING POINT" Then
+            Set oHB = oPart.HybridBodies.Item(j)
+            Exit For
+        End If
+    Next j
+
+    If oHB Is Nothing Then
+        MsgBox "'Measuring Point' group not found in the part.", vbExclamation
+        Exit Sub
+    End If
+
+    ' ---- collect all point names recursively ----
+    Dim colNames As New Collection
+    Call CollectPointNames(oHB, colNames)
+
+    If colNames.Count = 0 Then
+        MsgBox "No points found under 'Measuring Point'.", vbExclamation
+        Exit Sub
+    End If
+
+    ' ---- scan every view, delete matching DrawingText ----
+    Dim oSheet As DrawingSheet, oView As DrawingView
+    Dim oTexts As DrawingTexts, oTxt As DrawingText
+    Dim ti As Integer
+    Dim nDeleted As Integer
+    nDeleted = 0
+
+    For si = 1 To oDrawDoc.Sheets.Count
+        Set oSheet = oDrawDoc.Sheets.Item(si)
+        For vi = 1 To oSheet.Views.Count
+            Set oView = oSheet.Views.Item(vi)
+            Set oTexts = oView.Texts
+            For ti = oTexts.Count To 1 Step -1
+                Set oTxt = oTexts.Item(ti)
+                If oTxt.Leaders.Count > 0 Then
+                    If IsInCollection(colNames, oTxt.Name) Then
+                        oTxt.Delete
+                        nDeleted = nDeleted + 1
+                    End If
+                End If
+            Next ti
+        Next vi
+    Next si
+
+    oDrawDoc.Update
+    MsgBox nDeleted & " measuring point annotation(s) deleted.", vbInformation
+
+End Sub
+
+
+'======================================================
+Sub CollectPointNames(oHB As HybridBody, colNames As Collection)
+    Dim i As Integer
+    Dim oElem As Object
+
+    For i = 1 To oHB.HybridShapes.Count
+        Set oElem = oHB.HybridShapes.Item(i)
+        If TypeName(oElem) = "HybridShapePointCoord" Then
+            colNames.Add oElem.Name
+        End If
+    Next i
+
+    Dim s As Integer
+    For s = 1 To oHB.HybridBodies.Count
+        Call CollectPointNames(oHB.HybridBodies.Item(s), colNames)
+    Next s
+End Sub
+
+
+Function IsInCollection(col As Collection, s As String) As Boolean
+    Dim v As Variant
+    For Each v In col
+        If CStr(v) = s Then
+            IsInCollection = True
+            Exit Function
+        End If
+    Next v
+    IsInCollection = False
+End Function
